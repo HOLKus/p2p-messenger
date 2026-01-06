@@ -14,7 +14,6 @@ const useChat = (friendId) => {
     setMessages(saved);
 
     const handleIncoming = (msg) => {
-      // Принимаем сообщение только если оно от текущего друга или мы сами отправили его этому другу
       if (msg.sender === friendId || (msg.sender === 'me' && friendId)) {
         setMessages(prev => {
           if (prev.find(m => m.id === msg.id)) return prev;
@@ -25,9 +24,22 @@ const useChat = (friendId) => {
       }
     };
 
+    const handleStatus = (data) => {
+      if (data.type === 'message_status') {
+        setMessages(prev => {
+          const updated = prev.map(m => m.id === data.msgId ? { ...m, status: data.status } : m);
+          localStorage.setItem(`msgs_${friendId}`, JSON.stringify(updated));
+          return updated;
+        });
+      }
+    };
+
     PeerService.handlers.add(handleIncoming);
+    PeerService.statusHandlers.add(handleStatus);
+
     return () => {
       PeerService.handlers.delete(handleIncoming);
+      PeerService.statusHandlers.delete(handleStatus);
     };
   }, [friendId]);
 
