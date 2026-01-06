@@ -13,56 +13,55 @@ const App = () => {
   const [friendList, setFriendList] = useState(() => Storage.getFriends());
   const [showSettings, setShowSettings] = useState(false);
   const [secureFriends, setSecureFriends] = useState({});
-  const { messages, setMessages, sendMessage } = useChat(activeFriend);
+  
+  // Подключаем наш хук чата
+  const { messages, sendMessage } = useChat(activeFriend);
   
   const styles = darkMode ? darkStyles : lightStyles;
   const messagesEndRef = useRef(null);
 
-  const uniqueMessages = useMemo(() => {
-    if (!APP_CONFIG.DEDUPLICATION_ENABLED) return messages;
-    const map = new Map();
-    messages.forEach(m => map.set(m.id, m));
-    return Array.from(map.values());
-  }, [messages]);
+  // Фильтруем сообщения: только те, где отправитель или получатель — активный друг
+  const currentChatMessages = useMemo(() => {
+    if (!activeFriend) return [];
+    return messages.filter(m => 
+      m.sender === activeFriend || (m.sender === 'me' && activeFriend)
+    );
+  }, [messages, activeFriend]);
 
+  // Инициализация сервиса и обработка событий
   useEffect(() => {
     PeerService.init(peerId, friendList).then(id => {
       setPeerId(id);
       Storage.saveMyId(id);
     });
     
+    // Следим за состоянием шифрования
     PeerService.onKeyExchange = (fid) => {
-      setSecureFriends(prev => ({ ...prev, [fid]: !!PeerService.friendPublicKeys[fid] }));
+      setSecureFriends(prev => ({ 
+        ...prev, 
+        [fid]: !!PeerService.friendPublicKeys[fid] 
+      }));
     };
 
-    const handleStatus = (data) => {
-      if (data.type === 'message_status') {
-        setMessages(prev => prev.map(m => m.id === data.msgId ? {...m, status: data.status} : m));
-      }
-    };
-
-    if (PeerService.statusHandlers) {
-      PeerService.statusHandlers.add(handleStatus);
-    }
-
+    // Интервал проверки соединений
     const checker = setInterval(() => {
       friendList.forEach(f => {
-        if (!secureFriends[f.id]) PeerService.connectToFriend(f.id);
+        if (!PeerService.connections[f.id] || PeerService.connections[f.id].readyState !== 'open') {
+          PeerService.connectToFriend(f.id);
+        }
       });
     }, APP_CONFIG.CONNECTION_CHECK_INTERVAL);
 
-    return () => {
-      clearInterval(checker);
-      if (PeerService.statusHandlers) PeerService.statusHandlers.delete(handleStatus);
-    };
-  }, [friendList, secureFriends, peerId, setMessages]);
+    return () => clearInterval(checker);
+  }, [friendList, peerId]);
 
+  // Автопрокрутка вниз при новых сообщениях
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ 
-        behavior: APP_CONFIG.AUTO_SCROLL_SMOOTH ? 'smooth' : 'auto' 
-    });
-  }, [uniqueMessages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [currentChatMessages]);
 
+  // --- Функции управления друзьями ---
+  
   const addFriend = () => {
     const id = prompt("Введите ID друга:");
     const newFriend = createFriendObject(id, friendList);
@@ -98,7 +97,7 @@ const App = () => {
 
   return (
     <div style={styles.appContainer}>
-      {/* ЛЕВАЯ КОЛОНКА */}
+      {/* ЛЕВАЯ ПАНЕЛЬ (Список друзей) */}
       <div style={styles.leftColumn}>
         <div style={{padding:'20px', borderBottom: `1px solid ${darkMode?'#334155':'#D1D5DB'}`}}>
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
@@ -116,9 +115,7 @@ const App = () => {
                  style={{
                    ...styles.friendItem, 
                    ...(activeFriend === f.id ? styles.friendItemActive : {}),
-                   display:'flex', 
-                   alignItems:'center', 
-                   justifyContent:'space-between'
+                   display:'flex', alignItems:'center', justifyContent:'space-between'
                  }}>
               
               <div style={{display:'flex', alignItems:'center', flex: 1, overflow: 'hidden'}}>
@@ -130,9 +127,9 @@ const App = () => {
                 <div style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{f.name}</div>
               </div>
 
-              <div style={{display:'flex', gap: '5px', marginLeft: '10px'}}>
-                <button onClick={(e) => editFriend(f.id, e)} style={{background:'none', border:'none', cursor:'pointer', padding: '5px'}}>✏️</button>
-                <button onClick={(e) => deleteFriend(f.id, e)} style={{background:'none', border:'none', cursor:'pointer', padding: '5px'}}>🗑️</button>
+              <div style={{display:'flex', gap: '5px'}}>
+                <button onClick={(e) => editFriend(f.id, e)} style={{background:'none', border:'none', cursor:'pointer'}}>✏️</button>
+                <button onClick={(e) => deleteFriend(f.id, e)} style={{background:'none', border:'none', cursor:'pointer'}}>🗑️</button>
               </div>
             </div>
           ))}
@@ -143,7 +140,7 @@ const App = () => {
         </div>
       </div>
 
-      {/* ПРАВАЯ КОЛОНКА */}
+      {/* ПРАВАЯ ПАНЕЛЬ (Чат) */}
       <div style={styles.rightColumn}>
         {activeFriend ? (
           <>
@@ -151,16 +148,20 @@ const App = () => {
               <div>
                 <div style={{fontWeight:'bold'}}>{friendList.find(f => f.id === activeFriend)?.name}</div>
                 <div style={{fontSize:'11px', color: secureFriends[activeFriend] ? '#10B981' : '#F59E0B'}}>
-                  {secureFriends[activeFriend] ? 'Защищено' : 'Ожидание защиты...'}
+                  {secureFriends[activeFriend] ? 'Защищено (RSA/AES)' : 'Установка защиты...'}
                 </div>
               </div>
             </div>
 
             <div style={styles.messagesContainer}>
-              {uniqueMessages.filter(m => m.sender === activeFriend || m.receiver === activeFriend || (m.sender === 'me' && activeFriend)).map(m => (
+              {currentChatMessages.map(m => (
                 <div key={m.id} style={m.sender === 'me' ? styles.myMsg : styles.theirMsg}>
-                  {m.text}
-                  {m.sender === 'me' && <div style={{fontSize:'9px', opacity:0.7}}>{getStatusText(m.status)}</div>}
+                  <div>{m.text}</div>
+                  {m.sender === 'me' && (
+                    <div style={{fontSize:'10px', textAlign:'right', opacity:0.5, marginTop:'2px'}}>
+                      {m.status === 'delivered' ? '✓✓' : m.status === 'sent' ? '✓' : '...'}
+                    </div>
+                  )}
                 </div>
               ))}
               <div ref={messagesEndRef} />
@@ -168,8 +169,9 @@ const App = () => {
 
             <form onSubmit={(e) => { 
               e.preventDefault(); 
-              if(e.target.msg.value) { 
-                sendMessage(activeFriend, e.target.msg.value); 
+              const val = e.target.msg.value;
+              if(val.trim()) { 
+                sendMessage(activeFriend, val); 
                 e.target.msg.value=''; 
               } 
             }} style={styles.inputArea}>
@@ -178,11 +180,14 @@ const App = () => {
             </form>
           </>
         ) : (
-          <div style={{margin:'auto', opacity:0.5}}>Выберите чат или добавьте друга</div>
+          <div style={{margin:'auto', opacity:0.5, textAlign:'center'}}>
+            <h3>Выберите чат</h3>
+            <p>или добавьте друга по ID</p>
+          </div>
         )}
       </div>
 
-      {/* МОДАЛКА НАСТРОЕК */}
+      {/* Модалка настроек */}
       {showSettings && (
         <div style={styles.modalOverlay} onClick={() => setShowSettings(false)}>
           <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
@@ -194,7 +199,7 @@ const App = () => {
             }} style={{...styles.btnBlue, width:'100%'}}>Сменить тему</button>
             
             <button onClick={() => {
-              if(window.confirm("Это удалит ваш ID и всех друзей. Вы уверены?")) {
+              if(window.confirm("Это удалит ваш ID и всех друзей. Продолжить?")) {
                 localStorage.clear(); 
                 window.location.reload();
               }
