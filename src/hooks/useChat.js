@@ -5,46 +5,34 @@ const useChat = (friendId) => {
   const [messages, setMessages] = useState([]);
 
   useEffect(() => {
-    // 1. Загружаем сообщения из памяти при смене друга
-    if (friendId) {
-      const saved = JSON.parse(localStorage.getItem(`msgs_${friendId}`) || '[]');
-      setMessages(saved);
-    } else {
+    if (!friendId) {
       setMessages([]);
+      return;
     }
 
-    // 2. Функция обработки входящих
+    const saved = JSON.parse(localStorage.getItem(`msgs_${friendId}`) || '[]');
+    setMessages(saved);
+
     const handleIncoming = (msg) => {
-      // Проверяем, относится ли сообщение к текущему открытому чату
+      // Принимаем сообщение только если оно от текущего друга или мы сами отправили его этому другу
       if (msg.sender === friendId || (msg.sender === 'me' && friendId)) {
         setMessages(prev => {
-          const isDuplicate = prev.some(m => m.id === msg.id);
-          if (isDuplicate) return prev;
-
+          if (prev.find(m => m.id === msg.id)) return prev;
           const updated = [...prev, msg];
-          // Сохраняем в localStorage, используя правильный ID
           localStorage.setItem(`msgs_${friendId}`, JSON.stringify(updated));
           return updated;
         });
       }
     };
 
-    // 3. Подписываемся на события из PeerService
-    if (PeerService.handlers) {
-      PeerService.handlers.add(handleIncoming);
-    }
-
-    // 4. Очистка при размонтировании или смене ID
+    PeerService.handlers.add(handleIncoming);
     return () => {
-      if (PeerService.handlers) {
-        PeerService.handlers.delete(handleIncoming);
-      }
+      PeerService.handlers.delete(handleIncoming);
     };
   }, [friendId]);
 
   const sendMessage = async (to, text) => {
     if (!text.trim()) return;
-
     const newMsg = await PeerService.sendMessage(to, text);
     if (newMsg) {
       setMessages(prev => {
@@ -55,7 +43,7 @@ const useChat = (friendId) => {
     }
   };
 
-  return { messages, setMessages, sendMessage };
+  return { messages, sendMessage };
 };
 
 export default useChat;

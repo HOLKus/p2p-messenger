@@ -12,12 +12,13 @@ class PeerService {
     this.connections = {};
     this.friendPublicKeys = {};
     this.myKeys = null;
+    this.onKeyExchange = null;
   }
 
   async init(existingId = null, initialFriends = []) {
     try {
       if (!this.myKeys) this.myKeys = await CryptoService.generateKeys();
-    } catch(e) { console.error("Crypto error", e); }
+    } catch(e) { console.error("Crypto init error", e); }
     
     const savedId = existingId || localStorage.getItem('my_peer_id');
 
@@ -27,15 +28,21 @@ class PeerService {
           this.peer.off();
           if (!this.peer.destroyed) this.peer.destroy();
         }
+
         this.peer = new Peer(tid, APP_CONFIG.PEER_OPTIONS);
+        
         this.peer.on('open', (id) => {
           this.id = id;
           localStorage.setItem('my_peer_id', id);
+          console.log("PeerJS подключен, ID:", id);
           initialFriends.forEach(f => this.connectToFriend(f.id));
           resolve(id);
         });
+
         this.peer.on('connection', (c) => this.setupConnection(c));
+        
         this.peer.on('error', (err) => {
+          console.error("PeerJS Error:", err.type);
           if (['unavailable-id', 'network', 'socket-error'].includes(err.type)) {
             setTimeout(() => connect(tid), APP_CONFIG.ID_RETRY_INTERVAL);
           }
@@ -46,84 +53,58 @@ class PeerService {
   }
 
   connectToFriend(friendId) {
-    // Если peer еще не готов, мы сами не онлайн или уже есть соединение — выходим
     if (!this.peer || this.peer.destroyed || this.id === friendId) return;
     if (this.connections[friendId]?.open) return;
 
-    console.log(`[PeerService] Попытка установить связь с: ${friendId}`);
-    
     try {
       const conn = this.peer.connect(friendId, { reliable: true });
-      
-      // ЗАЩИТА: проверяем, что объект conn создался, прежде чем передавать его дальше
-      if (conn) {
-        this.setupConnection(conn);
-      }
+      if (conn) this.setupConnection(conn);
     } catch (e) {
-      console.error("[PeerService] Ошибка при вызове peer.connect:", e);
+      console.error("Connect error:", e);
     }
   }
 
   async sendHandshake(conn) {
     if (!this.myKeys || !conn || !conn.open) return;
-    const pubKey = await CryptoService.exportPublicKey(this.myKeys.publicKey);
-    conn.send({ type: 'handshake', publicKey: pubKey });
+    try {
+      const pubKey = await CryptoService.exportPublicKey(this.myKeys.publicKey);
+      conn.send({ type: 'handshake', publicKey: pubKey });
+    } catch (e) { console.error("Handshake error", e); }
   }
 
   setupConnection(conn) {
-    this.connections[conn.peer] = conn;
-    conn.on('open', () => this.sendHandshake(conn));
-    conn.on('data', async (data) => {
-      if (!conn || !conn.peer) {
-      console.warn("[PeerService] Попытка настроить пустое соединение (undefined)");
-      return;
-    }
-
+    if (!conn || !conn.peer) return;
     const friendId = conn.peer;
     this.connections[friendId] = conn;
 
     conn.on('open', () => {
-      console.log(`[PeerService] Канал связи открыт с: ${friendId}`);
+      console.log("Соединение открыто с:", friendId);
       this.sendHandshake(conn);
     });
 
     conn.on('data', async (data) => {
-      // ... (ваш код обработки данных)
-      console.log(`[PeerService] Получены данные от ${friendId}:`, data.type);
-      
       if (data.type === 'handshake') {
         this.friendPublicKeys[friendId] = await CryptoService.importPublicKey(data.publicKey);
         if (this.onKeyExchange) this.onKeyExchange(friendId);
-        
-        if (data.reply !== false) {
-           this.sendHandshake(conn);
-        }
-      }
-      if (data.type === 'handshake') {
-        this.friendPublicKeys[conn.peer] = await CryptoService.importPublicKey(data.publicKey);
-        if (this.onKeyExchange) this.onKeyExchange(conn.peer);
-        // Если мы получили ключ, но еще не отправили свой — отправляем
         if (data.reply !== false) {
            const pubKey = await CryptoService.exportPublicKey(this.myKeys.publicKey);
            conn.send({ type: 'handshake', publicKey: pubKey, reply: false });
         }
       }
+      
       if (data.type === 'message') {
-        const decrypted = await CryptoService.decryptMessage(data.encryptedMessage, this.myKeys.privateKey);
-        this.handlers.forEach(h => h({ id: data.msgId, text: decrypted, sender: conn.peer }));
+        try {
+          const decrypted = await CryptoService.decryptMessage(data.encryptedMessage, this.myKeys.privateKey);
+          this.handlers.forEach(h => h({ id: data.msgId, text: decrypted, sender: friendId }));
+        } catch (e) { console.error("Decryption error", e); }
       }
-    });
-    conn.on('error', (err) => {
-      console.error(`[PeerService] Ошибка соединения с ${friendId}:`, err);
     });
 
     conn.on('close', () => {
-      console.log(`[PeerService] Соединение закрыто: ${friendId}`);
       delete this.connections[friendId];
       delete this.friendPublicKeys[friendId];
       if (this.onKeyExchange) this.onKeyExchange(friendId);
     });
-  }
   }
 
   async sendMessage(friendId, text) {
@@ -132,10 +113,11 @@ class PeerService {
     if (!conn?.open || !pubKey) return false;
 
     const msgId = Date.now().toString();
-    const encrypted = await CryptoService.encryptMessage(text, pubKey);
-    conn.send({ type: 'message', encryptedMessage: encrypted, msgId });
-    
-    return { id: msgId, text, sender: 'me', status: 'sent' };
+    try {
+      const encrypted = await CryptoService.encryptMessage(text, pubKey);
+      conn.send({ type: 'message', encryptedMessage: encrypted, msgId });
+      return { id: msgId, text, sender: 'me', status: 'sent' };
+    } catch (e) { return false; }
   }
 }
 
