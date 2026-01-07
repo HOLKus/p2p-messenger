@@ -1,69 +1,71 @@
-// Вспомогательные функции для работы с форматом данных
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
+import forge from 'node-forge';
 
-function base64ToArrayBuffer(base64) {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
+// Генерация пары RSA-ключей (2048 бит)
 export const generateKeys = async () => {
-  return await window.crypto.subtle.generateKey(
-    {
-      name: "RSA-OAEP",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["encrypt", "decrypt"]
-  );
+  return new Promise((resolve, reject) => {
+    forge.pki.rsa.generateKeyPair({ bits: 2048, workers: -1 }, (err, keypair) => {
+      if (err) reject(err);
+      resolve(keypair);
+    });
+  });
 };
 
-export const exportPublicKey = async (key) => {
-  const exported = await window.crypto.subtle.exportKey("spki", key);
-  return arrayBufferToBase64(exported);
+// Экспорт публичного ключа в строку (для передачи другу)
+export const exportPublicKey = (publicKey) => {
+  return forge.pki.publicKeyToPem(publicKey);
 };
 
-export const importPublicKey = async (base64) => {
-  const buffer = base64ToArrayBuffer(base64);
-  return await window.crypto.subtle.importKey(
-    "spki",
-    buffer,
-    { name: "RSA-OAEP", hash: "SHA-256" },
-    true,
-    ["encrypt"]
-  );
+// Импорт публичного ключа из строки
+export const importPublicKey = (pem) => {
+  return forge.pki.publicKeyFromPem(pem);
 };
 
-export const encryptMessage = async (text, publicKey) => {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
-  const encrypted = await window.crypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
-    publicKey,
-    data
-  );
-  return arrayBufferToBase64(encrypted);
+// Шифрование сообщения (AES + RSA)
+// Мы создаем случайный AES ключ для сообщения, шифруем его через RSA друга, 
+// а само сообщение шифруем этим AES ключом.
+export const encryptMessage = async (text, friendPublicKey) => {
+  try {
+    const aesKey = forge.random.getBytesSync(16);
+    const iv = forge.random.getBytesSync(16);
+
+    const cipher = forge.cipher.createCipher('AES-CBC', aesKey);
+    cipher.start({ iv: iv });
+    cipher.update(forge.util.createBuffer(text, 'utf8'));
+    cipher.finish();
+    const encryptedText = cipher.output.getBytes();
+
+    // Шифруем AES-ключ публичным ключом друга
+    const encryptedAesKey = friendPublicKey.encrypt(aesKey, 'RSA-OAEP');
+
+    return JSON.stringify({
+      k: forge.util.encode64(encryptedAesKey),
+      iv: forge.util.encode64(iv),
+      t: forge.util.encode64(encryptedText)
+    });
+  } catch (e) {
+    console.error("Encryption failed:", e);
+    return null;
+  }
 };
 
-export const decryptMessage = async (base64Data, privateKey) => {
-  const data = base64ToArrayBuffer(base64Data);
-  const decrypted = await window.crypto.subtle.decrypt(
-    { name: "RSA-OAEP" },
-    privateKey,
-    data
-  );
-  const decoder = new TextDecoder();
-  return decoder.decode(decrypted);
+// Расшифровка сообщения
+export const decryptMessage = async (jsonPackage, myPrivateKey) => {
+  try {
+    const data = JSON.parse(jsonPackage);
+    
+    // Декодируем AES ключ своим приватным RSA ключом
+    const aesKey = myPrivateKey.decrypt(forge.util.decode64(data.k), 'RSA-OAEP');
+    const iv = forge.util.decode64(data.iv);
+    const encryptedText = forge.util.decode64(data.t);
+
+    const decipher = forge.cipher.createDecipher('AES-CBC', aesKey);
+    decipher.start({ iv: iv });
+    decipher.update(forge.util.createBuffer(encryptedText));
+    decipher.finish();
+
+    return decipher.output.toString('utf8');
+  } catch (e) {
+    console.error("Decryption failed:", e);
+    return "[Ошибка расшифровки]";
+  }
 };

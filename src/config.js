@@ -1,15 +1,19 @@
 export const APP_CONFIG = {
-    ID_RETRY_INTERVAL: 5000,
-    HANDSHAKE_RETRY_INTERVAL: 3000,
-    CONNECTION_CHECK_INTERVAL: 10000,
-    DEFAULT_NAME_SLICE: -4,
-    DEDUPLICATION_ENABLED: true,
-    AUTO_SCROLL_SMOOTH: true,
+    // Список бесплатных STUN-серверов от Google и Mozilla
     PEER_OPTIONS: {
-        host: '0.peerjs.com',
-        port: 443,
-        secure: true,
         debug: 1,
-        pingInterval: 5000
-    }
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' }
+            ],
+            // Это заставляет соединение держаться дольше
+            iceCandidatePoolSize: 10
+        }
+    },
+    CONNECTION_CHECK_INTERVAL: 5000,
+    AUTO_SCROLL_SMOOTH: true,
+    DEDUPLICATION_ENABLED: true
 };
