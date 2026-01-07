@@ -17,7 +17,11 @@ class PeerService {
 
   async init(existingId = null, initialFriends = []) {
     try {
-      if (!this.myKeys) this.myKeys = await CryptoService.generateKeys();
+      // Генерируем ключи forge (теперь это объекты с методами .encrypt/.decrypt)
+      if (!this.myKeys) {
+        console.log("[PeerService] Генерация RSA ключей...");
+        this.myKeys = await CryptoService.generateKeys();
+      }
     } catch(e) { console.error("Crypto init error", e); }
     
     const savedId = existingId || localStorage.getItem('my_peer_id');
@@ -34,6 +38,7 @@ class PeerService {
         this.peer.on('open', (id) => {
           this.id = id;
           localStorage.setItem('my_peer_id', id);
+          console.log("Ваш Peer ID:", id);
           initialFriends.forEach(f => this.connectToFriend(f.id));
           resolve(id);
         });
@@ -41,9 +46,8 @@ class PeerService {
         this.peer.on('connection', (c) => this.setupConnection(c));
         
         this.peer.on('error', (err) => {
-          console.error("PeerJS Error:", err.type);
           if (['unavailable-id', 'network', 'socket-error'].includes(err.type)) {
-            setTimeout(() => connect(tid), APP_CONFIG.ID_RETRY_INTERVAL);
+            setTimeout(() => connect(tid), 5000);
           }
         });
       };
@@ -64,8 +68,10 @@ class PeerService {
   async sendHandshake(conn) {
     if (!this.myKeys || !conn || conn.readyState !== 'open') return;
     try {
-      const pubKey = await CryptoService.exportPublicKey(this.myKeys.publicKey);
-      conn.send({ type: 'handshake', publicKey: pubKey });
+      // Экспортируем публичный ключ в PEM-строку для передачи
+      const pubKeyPem = CryptoService.exportPublicKey(this.myKeys.publicKey);
+      conn.send({ type: 'handshake', publicKey: pubKeyPem });
+      console.log(`[PeerService] Handshake отправлен другу: ${conn.peer}`);
     } catch (e) { console.error("Handshake error", e); }
   }
 
@@ -75,32 +81,35 @@ class PeerService {
     this.connections[friendId] = conn;
 
     conn.on('open', () => {
+      console.log(`[PeerService] Канал открыт: ${friendId}`);
       this.sendHandshake(conn);
-      this.statusHandlers.forEach(h => h({ type: 'status_update', friendId, online: true }));
     });
 
     conn.on('data', async (data) => {
-      // 1. Обработка ключей
       if (data.type === 'handshake') {
-        this.friendPublicKeys[friendId] = await CryptoService.importPublicKey(data.publicKey);
-        if (this.onKeyExchange) this.onKeyExchange(friendId);
-        if (data.reply !== false) {
-           const pubKey = await CryptoService.exportPublicKey(this.myKeys.publicKey);
-           conn.send({ type: 'handshake', publicKey: pubKey, reply: false });
-        }
+        try {
+          // Импортируем полученную PEM-строку обратно в объект ключа forge
+          this.friendPublicKeys[friendId] = CryptoService.importPublicKey(data.publicKey);
+          console.log(`[PeerService] Защита установлена для: ${friendId}`);
+          
+          if (this.onKeyExchange) this.onKeyExchange(friendId);
+          
+          if (data.reply !== false) {
+             const pubKeyPem = CryptoService.exportPublicKey(this.myKeys.publicKey);
+             conn.send({ type: 'handshake', publicKey: pubKeyPem, reply: false });
+          }
+        } catch (e) { console.error("Ошибка импорта ключа:", e); }
       }
       
-      // 2. Получение сообщения + Отправка подтверждения
       if (data.type === 'message') {
         try {
+          // Расшифровываем через forge
           const decrypted = await CryptoService.decryptMessage(data.encryptedMessage, this.myKeys.privateKey);
           this.handlers.forEach(h => h({ id: data.msgId, text: decrypted, sender: friendId }));
-          // Отправляем ACK (подтверждение)
           conn.send({ type: 'message_status', msgId: data.msgId, status: 'delivered' });
-        } catch (e) { console.error("Decryption error", e); }
+        } catch (e) { console.error("Ошибка расшифровки:", e); }
       }
 
-      // 3. Получение статуса от собеседника
       if (data.type === 'message_status') {
         this.statusHandlers.forEach(h => h(data));
       }
@@ -108,6 +117,7 @@ class PeerService {
 
     conn.on('close', () => {
       delete this.connections[friendId];
+      delete this.friendPublicKeys[friendId];
       this.statusHandlers.forEach(h => h({ type: 'status_update', friendId, online: false }));
     });
   }
