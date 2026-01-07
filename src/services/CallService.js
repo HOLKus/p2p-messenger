@@ -2,44 +2,63 @@ class CallService {
   constructor() {
     this.localStream = null;
     this.currentCall = null;
-    this.onStream = null;
-    this.onClose = null;
+    this.onStream = null; // Коллбэк для передачи удаленного потока в UI
+    this.onClose = null;  // Коллбэк для завершения звонка
   }
 
+  // Запуск микрофона
   async startLocalStream() {
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      });
+      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       return this.localStream;
     } catch (e) {
-      console.error("Access denied to media devices:", e);
-      throw e;
+      console.error("Не удалось получить доступ к микрофону:", e);
+      return null;
     }
   }
 
-  handleIncomingCall(call, stream) {
-    this.currentCall = call;
-    call.answer(stream);
-    this.setupCallHandlers(call);
+  // Инициировать звонок
+  async makeCall(peer, friendId, remoteStreamHandler) {
+    this.onStream = remoteStreamHandler;
+    const stream = await this.startLocalStream();
+    if (!stream) return;
+
+    this.currentCall = peer.call(friendId, stream);
+    this.setupCallEvents(this.currentCall);
   }
 
-  setupCallHandlers(call) {
+  // Ответить на звонок
+  async answerCall(call, remoteStreamHandler) {
+    this.currentCall = call;
+    this.onStream = remoteStreamHandler;
+    const stream = await this.startLocalStream();
+    
+    if (stream) {
+      call.answer(stream);
+      this.setupCallEvents(call);
+    } else {
+      call.close();
+    }
+  }
+
+  setupCallEvents(call) {
     call.on('stream', (remoteStream) => {
       if (this.onStream) this.onStream(remoteStream);
     });
-    call.on('close', () => this.stopAll());
-    call.on('error', () => this.stopAll());
+
+    call.on('close', () => this.stopCall());
+    call.on('error', () => this.stopCall());
   }
 
-  stopAll() {
+  stopCall() {
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
     }
-    if (this.currentCall) this.currentCall.close();
-    this.localStream = null;
-    this.currentCall = null;
+    if (this.currentCall) {
+      this.currentCall.close();
+      this.currentCall = null;
+    }
     if (this.onClose) this.onClose();
   }
 }

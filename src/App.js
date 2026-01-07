@@ -5,6 +5,7 @@ import { lightStyles, darkStyles } from './styles.js';
 import { formatId, copyToClipboard, getStatusText } from './constants.js';
 import { APP_CONFIG } from './config.js';
 import { Storage, createFriendObject } from './utils.js';
+import CallService from './services/CallService.js';
 
 const App = () => {
   const [darkMode, setDarkMode] = useState(() => Storage.getTheme() === 'dark');
@@ -30,10 +31,26 @@ const App = () => {
 
   // Инициализация сервиса и обработка событий
   useEffect(() => {
-    PeerService.init(peerId, friendList).then(id => {
-      setPeerId(id);
-      Storage.saveMyId(id);
+  PeerService.init(peerId, friendList).then(id => {
+    setPeerId(id);
+    
+    // Слушаем входящие звонки
+    PeerService.peer.on('call', (incomingCall) => {
+      const callerName = friendList.find(f => f.id === incomingCall.peer)?.name || "Неизвестный";
+      if (window.confirm(`Входящий звонок от: ${callerName}. Ответить?`)) {
+        CallService.answerCall(incomingCall, (remoteStream) => {
+          // Воспроизведение звука
+          const audio = new Audio();
+          audio.srcObject = remoteStream;
+          audio.play();
+        });
+      } else {
+        incomingCall.close();
+      }
     });
+  });
+  // ...
+}, [friendList]);
     
     // Следим за состоянием шифрования
     PeerService.onKeyExchange = (fid) => {
@@ -186,6 +203,28 @@ const App = () => {
           </div>
         )}
       </div>
+        <div style={styles.chatHeader}>
+          
+  <div>
+    <div style={{fontWeight:'bold'}}>{friendList.find(f => f.id === activeFriend)?.name}</div>
+    {/* Статус защиты... */}
+  </div>
+  
+  {/* Кнопка звонка */}
+  <button 
+    onClick={() => {
+      CallService.makeCall(PeerService.peer, activeFriend, (remoteStream) => {
+        const audio = new Audio();
+        audio.srcObject = remoteStream;
+        audio.play();
+      });
+      alert("Звоним другу...");
+    }}
+    style={{...styles.iconBtn, fontSize: '20px'}}
+  >
+    📞
+  </button>
+</div>
 
       {/* Модалка настроек */}
       {showSettings && (
@@ -211,6 +250,8 @@ const App = () => {
         </div>
       )}
     </div>
+
+    
   );
 };
 
