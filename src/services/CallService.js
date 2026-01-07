@@ -2,33 +2,48 @@ class CallService {
   constructor() {
     this.localStream = null;
     this.currentCall = null;
-    this.onStream = null; // Коллбэк для передачи удаленного потока в UI
-    this.onClose = null;  // Коллбэк для завершения звонка
+    this.onStream = null;
+    this.onClose = null;
   }
 
-  // Запуск микрофона
   async startLocalStream() {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       return this.localStream;
     } catch (e) {
-      console.error("Не удалось получить доступ к микрофону:", e);
+      console.error("Доступ к микрофону запрещен или отсутствует:", e);
+      alert("Ошибка: Не удалось получить доступ к микрофону.");
       return null;
     }
   }
 
-  // Инициировать звонок
   async makeCall(peer, friendId, remoteStreamHandler) {
+    if (!peer || !friendId) {
+      console.error("Не удается совершить звонок: peer или friendId не определены");
+      return;
+    }
+
     this.onStream = remoteStreamHandler;
     const stream = await this.startLocalStream();
     if (!stream) return;
 
-    this.currentCall = peer.call(friendId, stream);
-    this.setupCallEvents(this.currentCall);
+    try {
+      this.currentCall = peer.call(friendId, stream);
+      
+      // ЗАЩИТА: проверяем, что объект звонка создан
+      if (!this.currentCall) {
+        console.error("PeerJS не смог создать объект звонка.");
+        return;
+      }
+
+      this.setupCallEvents(this.currentCall);
+    } catch (e) {
+      console.error("Ошибка при вызове peer.call:", e);
+    }
   }
 
-  // Ответить на звонок
   async answerCall(call, remoteStreamHandler) {
+    if (!call) return;
     this.currentCall = call;
     this.onStream = remoteStreamHandler;
     const stream = await this.startLocalStream();
@@ -42,12 +57,27 @@ class CallService {
   }
 
   setupCallEvents(call) {
+    // Еще одна проверка перед подпиской на события
+    if (!call || typeof call.on !== 'function') {
+      console.error("Передан некорректный объект вызова в setupCallEvents");
+      return;
+    }
+
     call.on('stream', (remoteStream) => {
+      console.log("Получен удаленный аудио-поток");
       if (this.onStream) this.onStream(remoteStream);
     });
 
-    call.on('close', () => this.stopCall());
-    call.on('error', () => this.stopCall());
+    const handleEnd = () => {
+      console.log("Звонок завершен");
+      this.stopCall();
+    };
+
+    call.on('close', handleEnd);
+    call.on('error', (err) => {
+      console.error("Ошибка во время звонка:", err);
+      handleEnd();
+    });
   }
 
   stopCall() {
