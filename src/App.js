@@ -107,9 +107,11 @@ const App = () => {
         <div style={{padding:'20px', borderBottom: `1px solid ${darkMode?'#334155':'#D1D5DB'}`}}>
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
             <div onClick={() => copyToClipboard(peerId)} style={{cursor:'pointer'}}>
-              <div style={{fontSize:'10px', opacity:0.6}}>ВАШ ID</div>
-              <div style={{fontWeight:'bold', color: '#10B981'}}>{formatId(peerId)}</div>
-            </div>
+  <div style={{fontSize:'10px', opacity:0.6}}>ВАШ ID</div>
+  <div style={{fontWeight:'bold', color: peerId ? '#10B981' : '#EF4444'}}>
+    {peerId ? formatId(peerId) : "ПОДКЛЮЧЕНИЕ..."}
+  </div>
+</div>
             <button onClick={() => setShowSettings(true)} style={styles.iconBtn}>⚙️</button>
           </div>
         </div>
