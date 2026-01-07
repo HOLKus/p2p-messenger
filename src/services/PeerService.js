@@ -75,71 +75,45 @@ class PeerService {
     } catch (e) { console.error("Handshake error", e); }
   }
 
-  setupConnection(conn) {
-    if (!conn || !conn.peer) return;
-    const friendId = conn.peer;
-    this.connections[friendId] = conn;
-
-    conn.on('open', () => {
-      console.log(`[PeerService] Канал открыт: ${friendId}`);
-      this.sendHandshake(conn);
-    });
-
-    conn.on('data', async (data) => {
-      if (data.type === 'handshake') {
-        try {
-          // Импортируем полученную PEM-строку обратно в объект ключа forge
-          this.friendPublicKeys[friendId] = CryptoService.importPublicKey(data.publicKey);
-          console.log(`[PeerService] Защита установлена для: ${friendId}`);
-          
-          if (this.onKeyExchange) this.onKeyExchange(friendId);
-          
-          if (data.reply !== false) {
-             const pubKeyPem = CryptoService.exportPublicKey(this.myKeys.publicKey);
-             conn.send({ type: 'handshake', publicKey: pubKeyPem, reply: false });
-          }
-        } catch (e) { console.error("Ошибка импорта ключа:", e); }
-      }
-      
-      if (data.type === 'message') {
-        try {
-          // Расшифровываем через forge
-          const decrypted = await CryptoService.decryptMessage(data.encryptedMessage, this.myKeys.privateKey);
-          this.handlers.forEach(h => h({ id: data.msgId, text: decrypted, sender: friendId }));
-          conn.send({ type: 'message_status', msgId: data.msgId, status: 'delivered' });
-        } catch (e) { console.error("Ошибка расшифровки:", e); }
-      }
-
-      if (data.type === 'message_status') {
-        this.statusHandlers.forEach(h => h(data));
-      }
-    });
-
-    conn.on('close', () => {
-      delete this.connections[friendId];
-      delete this.friendPublicKeys[friendId];
-      this.statusHandlers.forEach(h => h({ type: 'status_update', friendId, online: false }));
-    });
-  }
+  if (data.type === 'message') {
+  try {
+    const theirPubKey = this.friendPublicKeys[friendId];
+    // ТЕПЕРЬ ПЕРЕДАЕМ: шифр, ключ друга И наш приватный ключ
+    const decrypted = CryptoService.decryptMessage(
+      data.encryptedMessage, 
+      theirPubKey, 
+      this.myKeys.privateKey
+    );
+    
+    this.handlers.forEach(h => h({ id: data.msgId, text: decrypted, sender: friendId }));
+    conn.send({ type: 'message_status', msgId: data.msgId, status: 'delivered' });
+  } catch (e) { console.error("Decryption failed", e); }
+}
 
   async sendMessage(friendId, text) {
-    const conn = this.connections[friendId];
-    const pubKey = this.friendPublicKeys[friendId];
+  const conn = this.connections[friendId];
+  const theirPubKey = this.friendPublicKeys[friendId];
 
-    if (!conn || conn.readyState !== 'open' || !pubKey) {
-      this.connectToFriend(friendId);
-      return { id: Date.now().toString(), text, sender: 'me', status: 'error' };
-    }
-
-    const msgId = Date.now().toString();
-    try {
-      const encrypted = await CryptoService.encryptMessage(text, pubKey);
-      conn.send({ type: 'message', encryptedMessage: encrypted, msgId });
-      return { id: msgId, text, sender: 'me', status: 'sent' };
-    } catch (e) { 
-      return { id: msgId, text, sender: 'me', status: 'error' }; 
-    }
+  if (!conn || conn.readyState !== 'open' || !theirPubKey) {
+    this.connectToFriend(friendId);
+    return { id: Date.now().toString(), text, sender: 'me', status: 'error' };
   }
+
+  const msgId = Date.now().toString();
+  try {
+    // ТЕПЕРЬ ПЕРЕДАЕМ: текст, ключ друга И наш приватный ключ
+    const encrypted = CryptoService.encryptMessage(
+      text, 
+      theirPubKey, 
+      this.myKeys.privateKey
+    );
+    
+    conn.send({ type: 'message', encryptedMessage: encrypted, msgId });
+    return { id: msgId, text, sender: 'me', status: 'sent' };
+  } catch (e) { 
+    return { id: msgId, text, sender: 'me', status: 'error' }; 
+  }
+}
 }
 
 export default new PeerService();
